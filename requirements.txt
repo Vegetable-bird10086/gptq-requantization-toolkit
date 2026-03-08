@@ -1,0 +1,6 @@
+torch==2.7.0+cu128
+transformers==4.57.6
+datasets==4.6.1
+tqdm==4.67.3
+safetensors==0.7.0
+gptqmodel==4.2.5

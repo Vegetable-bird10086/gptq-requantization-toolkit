@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter / editor
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Local wheels and build artifacts
+build/
+dist/
+*.egg-info/
+*.whl
+
+# Quantization artifacts / generated models
+artifacts/*.pt
+artifacts/*.bin
+models/output/
+Llama-2-7b-fp16-from-2bit/
+Llama-2-7b-GPTQ-4bit/
+_weightonly-*/
+
+# Large model files
+*.safetensors
+*.pt
+*.ckpt
+*.gguf
+
+# OS files
+.DS_Store
+Thumbs.db
