@@ -246,14 +246,7 @@ python scripts/wikitext_ppl.py \
 - 局部 `scale / zero-point` 细化搜索
 - `quant_params.pt` 缓存导出
 - activation-aware 搜索
-- 量化进度显示
 
 ---
 
-## 许可证与模型来源
 
-如果准备公开仓库，建议额外补充：
-
-- 本仓库脚本代码的许可证
-- 上游模型许可证
-- 是否允许再分发权重文件
