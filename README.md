@@ -12,49 +12,13 @@
 
 ---
 
-## 仓库建议
+## 仓库结构
 
-如果准备公开到 GitHub，建议按下面原则整理：
-
-### 1. 不建议直接把大模型权重普通提交到 Git
-当前仓库包含模型目录 `Llama-2-7b-EfficientQAT-w2g64-GPTQ/`。这类文件通常体积很大，并且可能受上游模型许可约束。
-
-建议：
-- 使用 **Git LFS** 管理 `.safetensors` 等大文件。
-- 或只保留目录说明、下载脚本、模型来源说明，把权重放到 Hugging Face / Release / 私有对象存储。
-- 在 README 中明确说明模型许可证和来源。
-
-### 2. 建议补充 `.gitignore`
-建议忽略：
-- `__pycache__/`
-- `*.pyc`
-- 中间量化产物目录，例如 `_weightonly-*`、`Llama-2-7b-fp16-from-2bit/`、`Llama-2-7b-GPTQ-4bit/`
-- 临时日志和实验输出
-
-### 3. 建议把“输入模型”和“输出模型”分开
-比较清晰的结构是：
-
-- `scripts/`：脚本
-- `data/`：如 `wiki.test.raw`
-- `models/output/`：导出的 FP16 和量化结果
-- `artifacts/`：`quant_params.pt` 等缓存
-
-如果暂时不想重构目录，也可以先保留当前结构，但 README 里要讲清楚每个目录的角色。
-
-### 4. 建议明确主工作流
-这个仓库最有价值的部分不是单个脚本，而是完整链路：
-
-
-当前仓库已经按这个思路整理为：
-
-- [artifacts](artifacts)
-
----
-
-  将已有的 GPTQ 模型导出为 Hugging Face FP16 checkpoint。
+- [scripts/export_2bit_gptq_to_fp16.py](scripts/export_2bit_gptq_to_fp16.py)  
+  将已有的 GPTQ 模型导出为 Hugging Face `FP16` checkpoint。
 
 - [scripts/quantize_fp16_to_4bit_gptq.py](scripts/quantize_fp16_to_4bit_gptq.py)  
-  使用 `gptqmodel` 的标准 GPTQ 流程，将 FP16 模型量化为 4bit GPTQ。
+  使用 `gptqmodel` 的标准 GPTQ 流程，将 `FP16` 模型量化为 `4-bit GPTQ`。
 
 - [scripts/weight_only_quantize.py](scripts/weight_only_quantize.py)  
   自定义 `weight-only` 量化脚本，支持：
@@ -63,38 +27,84 @@
   - `scale / zero-point` 搜索
   - activation-aware weighted search
   - 保存 `quant_params.pt` 以支持后续快速重量化
+
+- [scripts/fast_requantize_from_cache.py](scripts/fast_requantize_from_cache.py)  
+  从已保存的 `quant_params.pt` 快速重新量化同一份 `FP16` 权重。
+
+- [scripts/inference.py](scripts/inference.py)  
   对量化后的 GPTQ 模型做简单生成测试。
+
 - [scripts/wikitext_ppl.py](scripts/wikitext_ppl.py)  
   在 WikiText 文本上评估模型 perplexity。
 
-### 数据
 - [data/wiki.test.raw](data/wiki.test.raw)  
   用于 PPL 评估或校准实验的纯文本文件。
-### 模型目录
 
-  仓库中附带的 GPTQ 模型目录，通常作为 `2-bit GPTQ -> FP16` 导出链路的起点。
+- [artifacts](artifacts)  
+  用于保存 `quant_params.pt` 等中间缓存产物。
+
+- `models/source/`  
+  输入模型目录，通常放原始 GPTQ 模型。
+
+- `models/output/`  
+  输出模型目录，通常放导出的 `FP16` 模型和后续量化结果。
 
 ---
 
 ## 环境依赖
 
 建议环境：
+
 - Python 3.10+
 - PyTorch
+- Hugging Face Transformers
 - `gptqmodel`
 - CUDA 环境（推荐）
-一个最小安装示例：
+
+最小安装示例：
 
 ```bash
 pip install gptqmodel
 ```
 
+如需固定依赖，也可以参考 [requirements.txt](requirements.txt)。
 
 ---
+
 ## 快速开始
 
-### 1. 将量化 GPTQ 模型导出为 FP16
+### 1. 将 2-bit GPTQ 模型导出为 FP16
 
+使用 [scripts/export_2bit_gptq_to_fp16.py](scripts/export_2bit_gptq_to_fp16.py) 可以把已有的 GPTQ 模型反量化并导出为 Hugging Face 格式的 `FP16` checkpoint。
+
+基础用法：
+
+```bash
+python scripts/export_2bit_gptq_to_fp16.py \
+  --in_quant_dir /path/to/models/source/Llama-2-7b-EfficientQAT-w2g64-GPTQ \
+  --out_fp16_dir /path/to/models/output/Llama-2-7b-fp16-from-2bit
+```
+
+如果加载模型时需要开启 `remote code`：
+
+```bash
+python scripts/export_2bit_gptq_to_fp16.py \
+  --in_quant_dir /path/to/models/source/Llama-2-7b-EfficientQAT-w2g64-GPTQ \
+  --out_fp16_dir /path/to/models/output/Llama-2-7b-fp16-from-2bit \
+  --trust_remote_code
+```
+
+主要参数说明：
+
+- `--in_quant_dir`：输入的 GPTQ 模型目录，支持本地路径或 Hugging Face repo id。
+- `--out_fp16_dir`：导出的 `FP16` 模型保存目录。
+- `--trust_remote_code`：加载配置或模型时启用 `trust_remote_code`。
+
+脚本运行成功后会打印：
+
+```text
+exported_fp16: /path/to/output
+```
 
 ### 2. 使用标准 GPTQ 方法量化为 4bit
 
@@ -105,6 +115,15 @@ python scripts/quantize_fp16_to_4bit_gptq.py \
   --calib_text_file /path/to/data/wiki.test.raw
 ```
 
+常用可选参数：
+
+- `--bits 4`
+- `--group_size 128`
+- `--desc_act`
+- `--sym` 或 `--no_sym`
+- `--true_sequential` 或 `--no_true_sequential`
+
+### 3. 使用 `weight-only` 方法量化为 4bit
 
 基础示例：
 
@@ -139,9 +158,10 @@ python scripts/weight_only_quantize.py \
   --act_aware_alpha 1.0
 ```
 
-量化完成后，会在输出目录中保存：
+量化完成后，输出目录中通常会包含：
+
 - GPTQ 格式模型文件
-- `quant_params.pt`（默认）
+- `quant_params.pt`
 
 ### 4. 从缓存参数快速重新量化
 
@@ -153,9 +173,12 @@ python scripts/fast_requantize_from_cache.py \
 ```
 
 这个流程适用于：
-- 原始 FP16 权重保持不变
+
+- 原始 `FP16` 权重保持不变
 - 离线已完成参数搜索
-- 在线只想快速量化到 4bit
+- 在线只想快速量化到 `4bit`
+
+### 5. 文本生成测试
 
 ```bash
 python scripts/inference.py \
@@ -163,11 +186,37 @@ python scripts/inference.py \
   --prompt "The Large Language Model is"
 ```
 
-### 6. 评估 WikiText PPL
+如需采样生成，可额外传入：
 
 ```bash
+python scripts/inference.py \
+  --model /path/to/models/output/_weightonly-4bit-fast \
+  --prompt "The Large Language Model is" \
+  --do_sample \
+  --temperature 0.8 \
+  --top_p 0.95
+```
+
+### 6. 评估 WikiText PPL
+
+使用本地文本文件评估：
+
+```bash
+python scripts/wikitext_ppl.py \
+  --model /path/to/models/output/_weightonly-4bit-fast \
+  --text_file /path/to/data/wiki.test.raw \
   --max_length 2048 \
   --stride 512
+```
+
+如果环境可访问 Hugging Face，也可以直接使用数据集：
+
+```bash
+python scripts/wikitext_ppl.py \
+  --model /path/to/models/output/_weightonly-4bit-fast \
+  --dataset wikitext \
+  --subset wikitext-2-raw-v1 \
+  --split test
 ```
 
 ---
@@ -179,12 +228,13 @@ python scripts/inference.py \
 1. 从 `2-bit GPTQ` 导出 `FP16`
 2. 用 [scripts/weight_only_quantize.py](scripts/weight_only_quantize.py) 做一次高质量离线搜索
 3. 保存 `quant_params.pt`
-4. 后续部署阶段用 [scripts/fast_requantize_from_cache.py](scripts/fast_requantize_from_cache.py) 对同一份 FP16 权重做快速量化
+4. 后续部署阶段用 [scripts/fast_requantize_from_cache.py](scripts/fast_requantize_from_cache.py) 对同一份 `FP16` 权重做快速量化
 5. 用 [scripts/inference.py](scripts/inference.py) 和 [scripts/wikitext_ppl.py](scripts/wikitext_ppl.py) 验证效果
 
-这条链路适合你的目标：
-- 不修改 FP16 权重本身
-- 再基于离线缓存的量化参数快速得到 4bit 模型
+这条链路适合以下目标：
+
+- 不修改 `FP16` 权重本身
+- 基于离线缓存的量化参数快速得到 `4bit` 模型
 
 ---
 
@@ -193,28 +243,17 @@ python scripts/inference.py \
 相比标准 GPTQ 脚本，这个脚本提供了更多可控性：
 
 - `per-channel` 量化
-- 局部 scale / zero-point 细化搜索
+- 局部 `scale / zero-point` 细化搜索
 - `quant_params.pt` 缓存导出
-- 进度显示
+- activation-aware 搜索
+- 量化进度显示
 
-
-如果要在 GitHub 首页突出重点，建议在仓库简介里写成：
 ---
+
 ## 许可证与模型来源
 
-如果公开仓库，建议补充：
+如果准备公开仓库，建议额外补充：
 
 - 本仓库脚本代码的许可证
 - 上游模型许可证
 - 是否允许再分发权重文件
-
-
----
-- 增加 `requirements.txt` 或 `environment.yml`
-- 增加 `examples/` 目录保存命令模板
-- 增加 PPL/生成效果对比表
-
-- PyTorch
-- Hugging Face Transformers
-- gptqmodel
-3. 保存 `quant_params.pt`
