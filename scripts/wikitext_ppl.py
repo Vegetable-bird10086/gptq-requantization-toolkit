@@ -46,17 +46,20 @@ def compute_ppl(
 
     nll_sum = 0.0
     token_count = 0
+    total_steps = len(range(0, seq_len_total, stride))
 
     iterator = range(0, seq_len_total, stride)
+    progress_bar = None
+    last_progress_print = -1
     if show_progress:
         try:
             from tqdm import tqdm
 
-            iterator = tqdm(iterator, desc="ppl", unit="step")
+            progress_bar = tqdm(total=total_steps, desc="ppl", unit="step")
         except Exception:
-            pass
+            print(f"[ppl] 0/{total_steps} steps | 0/{seq_len_total} tokens | 0.0%", flush=True)
 
-    for i in iterator:
+    for step_idx, i in enumerate(iterator, start=1):
         begin_loc = max(i + stride - max_length, 0)
         end_loc = min(i + stride, seq_len_total)
         trg_len = end_loc - i
@@ -78,8 +81,25 @@ def compute_ppl(
         nll_sum += loss.item() * trg_len
         token_count += trg_len
 
+        if show_progress:
+            percent = 100.0 * token_count / max(seq_len_total, 1)
+            if progress_bar is not None:
+                progress_bar.update(1)
+                progress_bar.set_postfix(tokens=f"{token_count}/{seq_len_total}", pct=f"{percent:.1f}%")
+            else:
+                should_print = step_idx == total_steps or step_idx == 1 or step_idx - last_progress_print >= 10
+                if should_print:
+                    print(
+                        f"[ppl] {step_idx}/{total_steps} steps | {token_count}/{seq_len_total} tokens | {percent:.1f}%",
+                        flush=True,
+                    )
+                    last_progress_print = step_idx
+
         if end_loc == seq_len_total:
             break
+
+    if progress_bar is not None:
+        progress_bar.close()
 
     mean_nll = nll_sum / max(token_count, 1)
     ppl = float(math.exp(mean_nll))
