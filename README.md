@@ -102,6 +102,10 @@ pip install gptqmodel
 
 ## 快速开始
 
+完整端到端教程（从 GPTQ 到 QNN 二进制）请见：
+
+- [docs/gptq_to_qnn_tutorial_zh.md](docs/gptq_to_qnn_tutorial_zh.md)
+
 ### 0. 一键执行完整桥接导出（推荐）
 
 在完成 QAI Hub API 配置后，可以直接运行：
