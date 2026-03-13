@@ -5,15 +5,19 @@
 1. 将已有的 `2-bit GPTQ` 模型导出为 `FP16`。
 2. 基于 `FP16` 模型生成新的 `4-bit GPTQ` 模型。
 3. 不落盘 `FP16`，直接把 `2-bit GPTQ` 模型重打包或重映射为 `4-bit GPTQ`。
-3. 支持两类 4bit 量化方式：
+4. 支持两类 4bit 量化方式：
    - 标准 `GPTQ` 量化
    - `weight-only RTN / per-channel` 量化
-4. 将离线搜索得到的量化参数缓存下来，后续对同一份 `FP16` 权重做快速重新量化。
-5. 通过文本生成与 WikiText PPL 对量化效果做验证。
+5. 将离线搜索得到的量化参数缓存下来，后续对同一份 `FP16` 权重做快速重新量化。
+6. 支持“官方 QAIHub 导出流程 + GPTQ 权重参数替换”的桥接导出到 `w4a16` 部署产物。
+7. 通过文本生成与 WikiText PPL 对量化效果做验证。
 
 ---
 
 ## 仓库结构
+
+- [../run_export_pipeline.sh](../run_export_pipeline.sh)  
+  一键流水线脚本：填充官方 encodings → 校验 → 全量导出（4 分片）→ 下载 link 产物。
 
 - [scripts/export_2bit_gptq_to_fp16.py](scripts/export_2bit_gptq_to_fp16.py)  
   将已有的 GPTQ 模型导出为 Hugging Face `FP16` checkpoint。
@@ -38,6 +42,18 @@
 - [scripts/fast_requantize_from_cache.py](scripts/fast_requantize_from_cache.py)  
   从已保存的 `quant_params.pt` 快速重新量化同一份 `FP16` 权重。
 
+- [scripts/merge_gptq_into_aimet_encodings.py](scripts/merge_gptq_into_aimet_encodings.py)  
+  将 GPTQ 模型中的权重量化参数（`scale / zero-point`）合并到一个已有的 AIMET `model.encodings` 中，保留原始 `activation_encodings`，用于构建“官方 AIMET 校准激活 + GPTQ 权重参数”的桥接 checkpoint。
+
+- [scripts/audit_gptq_official_llama2_mapping.py](scripts/audit_gptq_official_llama2_mapping.py)  
+  审计 GPTQ 参数名与官方 `llama_sha_*.encodings` 的映射覆盖率，分别给出“精确命中”与“按 Llama2 `sha/conv` 结构规则命中”的统计与未匹配清单。
+
+- [scripts/fill_gptq_into_official_llama2_shards.py](scripts/fill_gptq_into_official_llama2_shards.py)  
+  按分片层偏移（`0/8/16/24`）将 GPTQ 参数写入官方 `llama_sha_0..3.encodings`。
+
+- [scripts/validate_filled_llama2_encodings.py](scripts/validate_filled_llama2_encodings.py)  
+  对替换结果做一致性校验（键集合、通道长度、量化公式、覆盖率）。
+
 - [scripts/inference.py](scripts/inference.py)  
   对量化后的 GPTQ 模型做简单生成测试。
 
@@ -49,6 +65,12 @@
 
 - [artifacts](artifacts)  
   用于保存 `quant_params.pt` 等中间缓存产物。
+
+- `artifacts/llama2_official_filled/`  
+  GPTQ 参数替换后的官方 encodings 工作目录（含 `as_llama_sha/` 可直接给导出脚本使用）。
+
+- `artifacts/llama_gptqfilled_w4a16_hub_downloads/`  
+  QAI Hub link 产物下载目录（`linked_model.bin` + `download_summary.json`）。
 
 - `models/source/`  
   输入模型目录，通常放原始 GPTQ 模型。
@@ -79,6 +101,34 @@ pip install gptqmodel
 ---
 
 ## 快速开始
+
+### 0. 一键执行完整桥接导出（推荐）
+
+在完成 QAI Hub API 配置后，可以直接运行：
+
+```bash
+bash ../run_export_pipeline.sh
+```
+
+常用可选参数：
+
+```bash
+# 跳过填充/校验，只执行导出+下载
+SKIP_FILL=1 bash ../run_export_pipeline.sh
+
+# 导出完成后不下载产物
+DO_DOWNLOAD=0 bash ../run_export_pipeline.sh
+```
+
+脚本支持通过环境变量覆写路径：
+
+- `LOCAL_FP16_DIR`
+- `LOCAL_GPTQ_DIR`
+- `LOCAL_GPTQ_ENCODINGS`
+- `OFFICIAL_CONFIG_DIR`
+- `FILLED_OUT_DIR`
+- `EXPORT_OUT_DIR`
+- `DOWNLOAD_OUT_DIR`
 
 ### 1. 将 2-bit GPTQ 模型导出为 FP16
 
@@ -255,18 +305,82 @@ python scripts/inference.py \
   --prompt "The Large Language Model is"
 ```
 
-如需采样生成，可额外传入：
+### 7. 审计 GPTQ 与官方 Llama2 encodings 的映射覆盖率
 
 ```bash
-python scripts/inference.py \
-  --model /path/to/models/output/_weightonly-4bit-fast \
-  --prompt "The Large Language Model is" \
-  --do_sample \
-  --temperature 0.8 \
-  --top_p 0.95
+python scripts/audit_gptq_official_llama2_mapping.py \
+  --gptq-encodings /path/to/models/output/Llama-2-7b-4bit/model.encodings \
+  --official-encodings '/root/.qaihm/qai-hub-models/models/llama_v2_7b_chat/v1/config/llama_sha_*.encodings' \
+  --out-report /path/to/artifacts/mapping_audit_report.json
 ```
 
-### 7. 评估 WikiText PPL
+输出会包含每个 `llama_sha_k` 分片的：
+
+- `exact_match_modules`：按原始名称直接命中的 GPTQ 模块数。
+- `structural_match_modules`：按 Llama2 `sha/conv` 结构规则命中的 GPTQ 模块数。
+- `official_keys_covered`：可覆盖的官方参数键数量。
+- `unmatched_module_names`：当前无法映射的 GPTQ 模块名。
+
+### 8. GPTQ 参数合并到 AIMET encodings
+
+当你已经有一个由官方 AIMET 流程生成的 checkpoint（包含 `model.encodings` 的激活编码），并希望把 GPTQ 权重参数注入进去时，可使用：
+
+```bash
+python scripts/merge_gptq_into_aimet_encodings.py \
+  --gptq-dir /path/to/models/output/Llama-2-7b-4bit \
+  --gptq-encodings /path/to/models/output/Llama-2-7b-4bit/model.encodings \
+  --aimet-checkpoint /path/to/aimet_checkpoint \
+  --out-checkpoint /path/to/aimet_checkpoint_gptq_merged \
+  --mapping-mode structural \
+  --layer-offset 0
+```
+
+脚本会：
+
+- 保留 AIMET 产物中的 `activation_encodings`
+- 用 GPTQ 参数覆盖 `param_encodings`
+- 生成 `gptq_merge_report.json` 报告匹配和覆盖情况
+
+如果你希望所有 GPTQ 线性层都必须匹配到 AIMET 参数项，可加 `--strict`。
+
+### 9. 一键填充官方 `llama_sha_0..3` 分片
+
+该脚本会自动按分片使用层偏移 `0 / 8 / 16 / 24`，将 GPTQ 参数写入官方四个 encodings 文件：
+
+```bash
+python scripts/fill_gptq_into_official_llama2_shards.py \
+  --gptq-dir /path/to/models/output/Llama-2-7b-4bit \
+  --gptq-encodings /path/to/models/output/Llama-2-7b-4bit/model.encodings \
+  --official-config-dir /root/.qaihm/qai-hub-models/models/llama_v2_7b_chat/v1/config \
+  --out-dir /path/to/artifacts/llama2_official_filled \
+  --mapping-mode structural \
+  --device cpu \
+  --clean
+```
+
+输出目录会包含：
+
+- `sha_0_merged/model.encodings` ... `sha_3_merged/model.encodings`
+- 每个分片对应的 `gptq_merge_report.json`
+- 汇总 `fill_summary.json`
+
+### 10. 验证填充结果是否一致
+
+```bash
+python scripts/validate_filled_llama2_encodings.py \
+  --official-config-dir /root/.qaihm/qai-hub-models/models/llama_v2_7b_chat/v1/config \
+  --filled-dir /path/to/artifacts/llama2_official_filled \
+  --out-report /path/to/artifacts/llama2_official_filled/validation_report.json
+```
+
+该验证会检查：
+
+- 填充后 `param_encodings` 键集合与官方一致。
+- 每个目标权重的通道长度与原始官方分片一致。
+- 每个通道满足 `min=(0-offset)*scale` 与 `max=(15-offset)*scale`（4bit）。
+- 四分片联合覆盖的 GPTQ 模块数（应为 `224`）。
+
+### 11. 评估 WikiText PPL
 
 使用本地文本文件评估：
 
@@ -320,6 +434,17 @@ python scripts/wikitext_ppl.py \
 - `tmac`、`qnn`、自定义 runtime 等只接受 4bit 容器格式
 - 希望磁盘上仍保存 2bit GPTQ 原始模型
 - 不想额外落盘完整 `FP16` checkpoint
+
+### 路线 C：QAIHub `w4a16` 桥接导出（已验证）
+
+该路线适合“保持官方导出框架，同时注入自有 GPTQ 权重参数”的目标：
+
+1. 使用 [scripts/fill_gptq_into_official_llama2_shards.py](scripts/fill_gptq_into_official_llama2_shards.py) 生成 `sha_*_merged/model.encodings`
+2. 使用 [scripts/validate_filled_llama2_encodings.py](scripts/validate_filled_llama2_encodings.py) 验证替换正确性
+3. 通过官方 `llama_v2_7b_chat.export` 提交 compile/link（使用本地 `FP16` 模型 + `as_llama_sha` encodings）
+4. 下载 link 产物到 `artifacts/llama_gptqfilled_w4a16_hub_downloads/`
+
+注意：该路线的最终产物是 QNN 上下文二进制（`linked_model.bin`），不是原生 Hugging Face GPTQ checkpoint。
 
 ---
 
