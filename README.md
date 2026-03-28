@@ -4,11 +4,11 @@
 
 一个面向 GPTQ 重量化 / 重新打包 / 导出到 HF checkpoint 的实验性工具集。
 
-本次更新只保留并同步 `scripts/` 目录中实际存在的脚本说明，移除仓库中已不存在脚本的介绍。
+
 
 ---
 
-## 脚本说明（基于 scripts/ 目录实际内容）
+## 脚本说明
 
 - `scripts/convert_et_to_hf_and_test.py`：
   - 作用：把 Executorch 风格的 state_dict 转为 Hugging Face 命名，并做一次简短的生成 + WikiText PPL 测试。
@@ -136,85 +136,6 @@ pip install gptqmodel transformers
 
 ---
 
-## 推荐工作流（精简）
 
-- 路线 A（FP16 中转）：
-  1. `export_2bit_gptq_to_fp16.py` 导出 FP16
-  2. `weight_only_quantize.py` 或 `quantize_fp16_to_4bit_gptq.py` 搜索并生成 `quant_params.pt`
-  3. `fast_requantize_from_cache.py` 用 `quant_params.pt` 快速批量重量化
-  4. 用 `inference.py` / `wikitext_ppl.py` 验证
-
-- 路线 B（直接 GPTQ->GPTQ）：
-  1. `direct_requantize_gptq.py`（`--direct_repack` / `--direct_code_lift` / 搜索模式）
-  2. 验证结果
-
----
-
-如果你希望我把 README 中某个具体段落保持不变、或把更多细节（例如每个脚本的完整参数表）补充进去，请告诉我。
-
-```bash
-python scripts/wikitext_ppl.py \
-  --model /path/to/models/output/_weightonly-4bit-fast \
-  --dataset wikitext \
-  --subset wikitext-2-raw-v1 \
-  --split test
-```
-
----
-
-## 推荐工作流
-
-对于当前仓库，更推荐下面的实验顺序：
-
-### 路线 A：标准 FP16 中转路线
-
-1. 从 `2-bit GPTQ` 导出 `FP16`
-2. 用 [scripts/weight_only_quantize.py](scripts/weight_only_quantize.py) 做一次高质量离线搜索
-3. 保存 `quant_params.pt`
-4. 后续部署阶段用 [scripts/fast_requantize_from_cache.py](scripts/fast_requantize_from_cache.py) 对同一份 `FP16` 权重做快速量化
-5. 用 [scripts/inference.py](scripts/inference.py) 和 [scripts/wikitext_ppl.py](scripts/wikitext_ppl.py) 验证效果
-
-### 路线 B：直接 GPTQ -> GPTQ 路线
-
-1. 直接运行 [scripts/direct_requantize_gptq.py](scripts/direct_requantize_gptq.py)
-2. 若目标是后端兼容性转换，优先使用 `--direct_repack`
-3. 若目标是整数码值嵌入，使用 `--direct_code_lift`
-4. 若目标是直接搜索新的 4bit 参数，则不加上述两个参数，或复用 `--requant_from_cache`
-5. 再使用生成与 PPL 脚本验证结果
-
-这条链路适合以下目标：
-
-- 不修改 `FP16` 权重本身
-- 基于离线缓存的量化参数快速得到 `4bit` 模型
-
-直接 GPTQ -> GPTQ 路线适合以下目标：
-
-- `tmac`、`qnn`、自定义 runtime 等只接受 4bit 容器格式
-- 希望磁盘上仍保存 2bit GPTQ 原始模型
-- 不想额外落盘完整 `FP16` checkpoint
-
-### 路线 C：QAIHub `w4a16` 桥接导出（已验证）
-
-该路线适合“保持官方导出框架，同时注入自有 GPTQ 权重参数”的目标：
-
-1. 使用 [scripts/fill_gptq_into_official_llama2_shards.py](scripts/fill_gptq_into_official_llama2_shards.py) 生成 `sha_*_merged/model.encodings`
-2. 使用 [scripts/validate_filled_llama2_encodings.py](scripts/validate_filled_llama2_encodings.py) 验证替换正确性
-3. 通过官方 `llama_v2_7b_chat.export` 提交 compile/link（使用本地 `FP16` 模型 + `as_llama_sha` encodings）
-4. 下载 link 产物到 `artifacts/llama_gptqfilled_w4a16_hub_downloads/`
-
-注意：该路线的最终产物是 QNN 上下文二进制（`linked_model.bin`），不是原生 Hugging Face GPTQ checkpoint。
-
----
-
-## `weight_only_quantize.py` 的特点
-
-相比标准 GPTQ 脚本，这个脚本提供了更多可控性：
-
-- `per-channel` 量化
-- 局部 `scale / zero-point` 细化搜索
-- `quant_params.pt` 缓存导出
-- activation-aware 搜索
-
----
 
 
